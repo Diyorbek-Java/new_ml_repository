@@ -41,7 +41,7 @@ models/*.h5
 models/*.joblib
 
 # Data (large files)
-data/*.csv
+# data/*.csv
 data/*.json
 data/*.xlsx
 
