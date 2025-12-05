@@ -4,10 +4,10 @@ import numpy as np
 import joblib
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Predict Disaster", page_icon="🔮", layout="wide")
+st.set_page_config(page_title="Predict Incident Type", page_icon="🔮", layout="wide")
 
-st.title("🔮 Disaster Type Prediction")
-st.markdown("Enter disaster information to predict the type")
+st.title("🔮 Incident Type Prediction")
+st.markdown("Enter disaster declaration information to predict the incident type")
 
 st.markdown("---")
 
@@ -56,10 +56,6 @@ with col1:
 
     region = st.selectbox("FEMA Region (1-10)", list(range(1, 11)), index=8)
     st.caption("FEMA administrative region")
-
-    fips_state = st.number_input("FIPS State Code", min_value=0, max_value=100, value=6)
-    fips_county = st.number_input("FIPS County Code", min_value=0, max_value=999, value=37)
-    place_code = st.number_input("Place Code", min_value=0, max_value=99999, value=0)
 
 with col2:
     st.subheader("Declaration Details")
@@ -120,9 +116,6 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
         input_data['hmProgramDeclared'] = int(hm_program)
         input_data['tribalRequest'] = 1 if tribal_request == "Yes" else 0
         input_data['region'] = region
-        input_data['fipsStateCode'] = fips_state
-        input_data['fipsCountyCode'] = fips_county
-        input_data['placeCode'] = place_code
 
         # Show encoded data
         with st.expander("🔢 Encoded Features"):
@@ -154,14 +147,14 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
         st.write("**Prediction Probabilities:**", prediction_proba.tolist())
 
         # Decode
-        predicted_disaster = models['target_encoder'].inverse_transform([prediction])[0]
+        predicted_incident = models['target_encoder'].inverse_transform([prediction])[0]
         confidence = prediction_proba[prediction] * 100
 
         # Results
         st.markdown("---")
         st.markdown("## 🎯 PREDICTION RESULTS")
 
-        st.success(f"### 🌪️ Predicted Disaster Type: **{predicted_disaster.upper()}**")
+        st.success(f"### 🌪️ Predicted Incident Type: **{predicted_incident.upper()}**")
         st.info(f"### 📊 Confidence: **{confidence:.2f}%**")
 
         if confidence > 70:
@@ -172,15 +165,15 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
             st.error("❌ LOW CONFIDENCE - Uncertain prediction")
 
         # Top 5
-        st.markdown("### 📈 Top 5 Most Likely Disaster Types")
+        st.markdown("### 📈 Top 5 Most Likely Incident Types")
 
         top_5_idx = np.argsort(prediction_proba)[::-1][:5]
-        top_5_disasters = models['target_encoder'].inverse_transform(top_5_idx)
+        top_5_incidents = models['target_encoder'].inverse_transform(top_5_idx)
         top_5_probs = prediction_proba[top_5_idx] * 100
 
         results_df = pd.DataFrame({
             "Rank": [1, 2, 3, 4, 5],
-            "Disaster Type": top_5_disasters,
+            "Incident Type": top_5_incidents,
             "Probability (%)": [f"{p:.2f}" for p in top_5_probs]
         })
 
@@ -190,7 +183,7 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
         fig = go.Figure(data=[
             go.Bar(
                 x=top_5_probs,
-                y=top_5_disasters,
+                y=top_5_incidents,
                 orientation='h',
                 text=[f'{prob:.1f}%' for prob in top_5_probs],
                 textposition='outside'
@@ -198,7 +191,7 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
         ])
         fig.update_layout(
             xaxis_title="Probability (%)",
-            yaxis_title="Disaster Type",
+            yaxis_title="Incident Type",
             height=300,
             showlegend=False
         )
@@ -212,10 +205,14 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
             'Hurricane': ["Activate evacuation", "Pre-position supplies", "Coastal response"],
             'Flood': ["Deploy water rescue", "Monitor water levels", "Contamination prep"],
             'Fire': ["Fire suppression", "Monitor air quality", "Plan evacuations"],
-            'Biological': ["Public health response", "Testing facilities", "Quarantine measures"]
+            'Biological': ["Public health response", "Testing facilities", "Quarantine measures"],
+            'Tornado': ["Deploy search & rescue", "Structural assessments", "Debris clearance"],
+            'Earthquake': ["Structural assessments", "Utility restoration", "Aftershock monitoring"],
+            'Snow': ["Clear transportation routes", "Emergency heating", "Power restoration"],
+            'Coastal Storm': ["Coastal evacuations", "Flood barriers", "Marine rescue readiness"]
         }
 
-        recs = actions.get(predicted_disaster, ["Deploy emergency teams", "Coordinate response", "Monitor situation"])
+        recs = actions.get(predicted_incident, ["Deploy emergency teams", "Coordinate response", "Monitor situation"])
 
         for rec in recs:
             st.write(f"- {rec}")
@@ -227,4 +224,4 @@ if st.button("🎯 PREDICT", type="primary", use_container_width=True):
             st.code(traceback.format_exc())
 
 st.markdown("---")
-st.caption("🔮 Disaster Type Prediction | Random Forest Model | 89% Accuracy")
+st.caption("🔮 Incident Type Prediction | Machine Learning Model")

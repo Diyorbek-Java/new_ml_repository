@@ -11,7 +11,9 @@ from sklearn.naive_bayes import GaussianNB
 import plotly.graph_objects as go
 import plotly.express as px
 import pickle
+import joblib
 import time
+import os
 
 st.set_page_config(page_title="Model Training", page_icon="🤖", layout="wide")
 
@@ -45,22 +47,15 @@ def load_and_prepare_data():
     try:
         df = pd.read_csv('data/disaster_declarations.csv')
 
-        # Select relevant columns
-        feature_cols = ['state', 'declarationType', 'fyDeclared', 'incidentType',
+        # Select relevant columns (incidentType is now the target, not a feature)
+        feature_cols = ['state', 'declarationType', 'fyDeclared',
                        'ihProgramDeclared', 'iaProgramDeclared', 'paProgramDeclared',
                        'hmProgramDeclared', 'tribalRequest', 'region']
 
-        available_cols = [col for col in feature_cols if col in df.columns]
+        # Also need incidentType as target
+        all_cols = feature_cols + ['incidentType']
+        available_cols = [col for col in all_cols if col in df.columns]
         df_clean = df[available_cols].copy()
-
-        # Create target variable
-        program_cols = [col for col in ['ihProgramDeclared', 'iaProgramDeclared',
-                                         'paProgramDeclared', 'hmProgramDeclared'] if col in df_clean.columns]
-
-        if program_cols:
-            df_clean['needs_assistance'] = (df_clean[program_cols].sum(axis=1) > 0).astype(int)
-        else:
-            df_clean['needs_assistance'] = (df_clean['declarationType'] == 'DR').astype(int)
 
         # Remove missing values
         df_clean = df_clean.dropna()
@@ -154,16 +149,21 @@ if df is not None:
         df_encoded = df.copy()
         encoders = {}
 
-        categorical_cols = ['state', 'declarationType', 'incidentType']
+        # Encode categorical features (not incidentType - that's the target)
+        categorical_cols = ['state', 'declarationType']
         for col in categorical_cols:
             if col in df_encoded.columns:
                 le = LabelEncoder()
                 df_encoded[col + '_encoded'] = le.fit_transform(df_encoded[col].astype(str))
                 encoders[col] = le
 
-        # Prepare features and target
+        # Encode target variable (incidentType)
+        target_encoder = LabelEncoder()
+        y = target_encoder.fit_transform(df_encoded['incidentType'].astype(str))
+
+        # Prepare features
         feature_cols = []
-        for col in ['state_encoded', 'declarationType_encoded', 'incidentType_encoded']:
+        for col in ['state_encoded', 'declarationType_encoded']:
             if col in df_encoded.columns:
                 feature_cols.append(col)
 
@@ -174,7 +174,6 @@ if df is not None:
                 feature_cols.append(col)
 
         X = df_encoded[feature_cols].fillna(0)
-        y = df_encoded['needs_assistance']
 
         # Split data
         status_text.text("Splitting data into train and test sets...")
@@ -279,16 +278,21 @@ if df is not None:
         best_model_name = max(results, key=lambda x: results[x]['test_acc'])
         best_model = models[best_model_name]
 
-        # Save best model
-        model_package = {
-            'model': best_model,
-            'scaler': scaler,
-            'encoders': encoders,
-            'feature_cols': feature_cols
-        }
+        # Create models directory if it doesn't exist
+        os.makedirs('models', exist_ok=True)
 
-        with open('models/disaster_model.pkl', 'wb') as f:
-            pickle.dump(model_package, f)
+        # Save individual components (as expected by prediction page)
+        joblib.dump(best_model, 'models/disaster_model.pkl')
+        joblib.dump(scaler, 'models/scaler.pkl')
+        joblib.dump(encoders, 'models/label_encoders.pkl')
+        joblib.dump(target_encoder, 'models/target_encoder.pkl')
+        joblib.dump(feature_cols, 'models/feature_names.pkl')
+        joblib.dump({
+            'model_name': best_model_name,
+            'accuracy': results[best_model_name]['test_acc'],
+            'num_classes': len(target_encoder.classes_),
+            'classes': target_encoder.classes_.tolist()
+        }, 'models/model_metadata.pkl')
 
         status_text.text("Training completed!")
         progress_bar.progress(100)

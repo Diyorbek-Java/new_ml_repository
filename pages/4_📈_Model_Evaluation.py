@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
+import joblib
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -10,6 +11,7 @@ from sklearn.metrics import (
     confusion_matrix, classification_report, roc_curve, auc,
     precision_recall_curve
 )
+from sklearn.preprocessing import label_binarize
 from sklearn.model_selection import cross_val_score
 import warnings
 warnings.filterwarnings('ignore')
@@ -52,9 +54,14 @@ st.markdown('</div>', unsafe_allow_html=True)
 @st.cache_resource
 def load_model():
     try:
-        with open('models/disaster_model.pkl', 'rb') as f:
-            model_package = pickle.load(f)
-        return model_package
+        return {
+            'model': joblib.load('models/disaster_model.pkl'),
+            'scaler': joblib.load('models/scaler.pkl'),
+            'encoders': joblib.load('models/label_encoders.pkl'),
+            'target_encoder': joblib.load('models/target_encoder.pkl'),
+            'feature_cols': joblib.load('models/feature_names.pkl'),
+            'metadata': joblib.load('models/model_metadata.pkl')
+        }
     except FileNotFoundError:
         return None
 
@@ -67,33 +74,34 @@ def load_and_prepare_data():
 
         df = pd.read_csv('data/disaster_declarations.csv')
 
-        feature_cols = ['state', 'declarationType', 'fyDeclared', 'incidentType',
+        # Feature columns (incidentType is now the target, not a feature)
+        feature_cols = ['state', 'declarationType', 'fyDeclared',
                        'ihProgramDeclared', 'iaProgramDeclared', 'paProgramDeclared',
                        'hmProgramDeclared', 'tribalRequest', 'region']
 
-        available_cols = [col for col in feature_cols if col in df.columns]
+        # Also need incidentType as target
+        all_cols = feature_cols + ['incidentType']
+        available_cols = [col for col in all_cols if col in df.columns]
         df_clean = df[available_cols].copy()
-
-        program_cols = [col for col in ['ihProgramDeclared', 'iaProgramDeclared',
-                                         'paProgramDeclared', 'hmProgramDeclared'] if col in df_clean.columns]
-
-        if program_cols:
-            df_clean['needs_assistance'] = (df_clean[program_cols].sum(axis=1) > 0).astype(int)
-        else:
-            df_clean['needs_assistance'] = (df_clean['declarationType'] == 'DR').astype(int)
 
         df_clean = df_clean.dropna()
 
         # Encode
         df_encoded = df_clean.copy()
-        categorical_cols = ['state', 'declarationType', 'incidentType']
+
+        # Encode categorical features (not incidentType - that's the target)
+        categorical_cols = ['state', 'declarationType']
         for col in categorical_cols:
             if col in df_encoded.columns:
                 le = LabelEncoder()
                 df_encoded[col + '_encoded'] = le.fit_transform(df_encoded[col].astype(str))
 
+        # Encode target variable (incidentType)
+        target_encoder = LabelEncoder()
+        y = target_encoder.fit_transform(df_encoded['incidentType'].astype(str))
+
         feature_cols_encoded = []
-        for col in ['state_encoded', 'declarationType_encoded', 'incidentType_encoded']:
+        for col in ['state_encoded', 'declarationType_encoded']:
             if col in df_encoded.columns:
                 feature_cols_encoded.append(col)
 
@@ -104,19 +112,18 @@ def load_and_prepare_data():
                 feature_cols_encoded.append(col)
 
         X = df_encoded[feature_cols_encoded].fillna(0)
-        y = df_encoded['needs_assistance']
 
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        return X_train, X_test, y_train, y_test
+        return X_train, X_test, y_train, y_test, target_encoder
 
     except FileNotFoundError:
-        return None, None, None, None
+        return None, None, None, None, None
 
 model_package = load_model()
-X_train, X_test, y_train, y_test = load_and_prepare_data()
+X_train, X_test, y_train, y_test, target_encoder = load_and_prepare_data()
 
 if model_package is not None and X_test is not None:
     model = model_package['model']
@@ -201,6 +208,7 @@ if model_package is not None and X_test is not None:
     st.header("🎯 Confusion Matrix")
 
     cm = confusion_matrix(y_test, y_pred)
+    class_names = target_encoder.classes_
 
     col1, col2 = st.columns([2, 1])
 
@@ -209,38 +217,42 @@ if model_package is not None and X_test is not None:
         fig_cm = px.imshow(
             cm,
             labels=dict(x="Predicted Label", y="True Label", color="Count"),
-            x=['No Assistance', 'Needs Assistance'],
-            y=['No Assistance', 'Needs Assistance'],
-            title="Confusion Matrix",
+            x=class_names,
+            y=class_names,
+            title="Confusion Matrix - Incident Type Predictions",
             color_continuous_scale='Blues',
             text_auto=True
         )
-        fig_cm.update_layout(height=500)
+        fig_cm.update_layout(height=600)
         st.plotly_chart(fig_cm, use_container_width=True)
 
     with col2:
-        st.markdown("### Matrix Breakdown")
+        st.markdown("### Matrix Summary")
 
         total = cm.sum()
-        tn, fp, fn, tp = cm.ravel()
+        correct = np.trace(cm)
+        incorrect = total - correct
 
         st.markdown(f"""
-        **True Negatives (TN):** {tn:,}
-        - Correctly predicted NO assistance
-        - Percentage: {(tn/total)*100:.2f}%
+        **Total Predictions:** {total:,}
 
-        **False Positives (FP):** {fp:,}
-        - Incorrectly predicted assistance
-        - Percentage: {(fp/total)*100:.2f}%
+        **Correct Predictions:** {correct:,}
+        - Percentage: {(correct/total)*100:.2f}%
 
-        **False Negatives (FN):** {fn:,}
-        - Missed assistance cases
-        - Percentage: {(fn/total)*100:.2f}%
+        **Incorrect Predictions:** {incorrect:,}
+        - Percentage: {(incorrect/total)*100:.2f}%
 
-        **True Positives (TP):** {tp:,}
-        - Correctly predicted assistance
-        - Percentage: {(tp/total)*100:.2f}%
+        **Number of Classes:** {len(class_names)}
         """)
+
+        # Show most confused classes
+        st.markdown("### Most Confused")
+        cm_copy = cm.copy()
+        np.fill_diagonal(cm_copy, 0)
+        if cm_copy.sum() > 0:
+            max_idx = np.unravel_index(cm_copy.argmax(), cm_copy.shape)
+            st.markdown(f"**{class_names[max_idx[0]]}** → **{class_names[max_idx[1]]}**")
+            st.markdown(f"Confused {cm_copy[max_idx]:,} times")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -248,72 +260,93 @@ if model_package is not None and X_test is not None:
     st.markdown('<div class="content-box">', unsafe_allow_html=True)
     st.header("📋 Classification Report")
 
-    report = classification_report(y_test, y_pred, target_names=['No Assistance', 'Needs Assistance'], output_dict=True)
+    report = classification_report(y_test, y_pred, target_names=class_names, output_dict=True)
     report_df = pd.DataFrame(report).transpose()
 
     st.dataframe(report_df.style.background_gradient(cmap='YlOrRd', subset=['f1-score']), use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ROC Curve
+    # ROC Curve (Multi-class)
     st.markdown('<div class="content-box">', unsafe_allow_html=True)
-    st.header("📉 ROC Curve")
+    st.header("📉 ROC Curve - Multi-class")
+
+    # Binarize the output for multi-class ROC
+    n_classes = len(class_names)
+    y_test_bin = label_binarize(y_test, classes=range(n_classes))
+
+    # Compute ROC curve and ROC area for each class
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_pred_proba[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+
+    # Compute micro-average ROC curve and ROC area
+    fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_pred_proba.ravel())
+    roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
 
     col1, col2 = st.columns(2)
 
     with col1:
-        # Calculate ROC curve
-        fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba[:, 1])
-        roc_auc = auc(fpr, tpr)
-
+        # Plot ROC curves for top 5 classes by frequency
         fig_roc = go.Figure()
 
+        # Add micro-average
         fig_roc.add_trace(go.Scatter(
-            x=fpr, y=tpr,
-            name=f'ROC Curve (AUC = {roc_auc:.4f})',
+            x=fpr["micro"], y=tpr["micro"],
+            name=f'Micro-average (AUC = {roc_auc["micro"]:.3f})',
             mode='lines',
-            line=dict(color='#667eea', width=3)
+            line=dict(color='deeppink', width=3, dash='dash')
         ))
 
+        # Add ROC curves for each class (show top 5 by AUC)
+        top_classes = sorted(range(n_classes), key=lambda i: roc_auc[i], reverse=True)[:5]
+        colors = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#43e97b']
+
+        for idx, i in enumerate(top_classes):
+            fig_roc.add_trace(go.Scatter(
+                x=fpr[i], y=tpr[i],
+                name=f'{class_names[i]} (AUC = {roc_auc[i]:.3f})',
+                mode='lines',
+                line=dict(color=colors[idx], width=2)
+            ))
+
+        # Add random classifier line
         fig_roc.add_trace(go.Scatter(
             x=[0, 1], y=[0, 1],
-            name='Random Classifier',
+            name='Random',
             mode='lines',
-            line=dict(color='red', dash='dash', width=2)
+            line=dict(color='gray', dash='dash', width=1)
         ))
 
         fig_roc.update_layout(
-            title=f'ROC Curve (AUC = {roc_auc:.4f})',
+            title='ROC Curves (Top 5 Classes by AUC)',
             xaxis_title='False Positive Rate',
             yaxis_title='True Positive Rate',
             height=500,
-            showlegend=True
+            showlegend=True,
+            legend=dict(x=0.6, y=0.1)
         )
 
         st.plotly_chart(fig_roc, use_container_width=True)
 
     with col2:
-        # Precision-Recall Curve
-        precision_curve, recall_curve, _ = precision_recall_curve(y_test, y_pred_proba[:, 1])
+        # Show AUC scores for all classes
+        st.markdown("### AUC Scores by Class")
 
-        fig_pr = go.Figure()
+        auc_data = pd.DataFrame({
+            'Incident Type': [class_names[i] for i in range(n_classes)],
+            'AUC Score': [roc_auc[i] for i in range(n_classes)]
+        }).sort_values('AUC Score', ascending=False)
 
-        fig_pr.add_trace(go.Scatter(
-            x=recall_curve, y=precision_curve,
-            name='Precision-Recall Curve',
-            mode='lines',
-            line=dict(color='#764ba2', width=3),
-            fill='tozeroy'
-        ))
-
-        fig_pr.update_layout(
-            title='Precision-Recall Curve',
-            xaxis_title='Recall',
-            yaxis_title='Precision',
+        st.dataframe(
+            auc_data.style.background_gradient(cmap='RdYlGn', subset=['AUC Score']),
+            use_container_width=True,
             height=500
         )
-
-        st.plotly_chart(fig_pr, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -326,7 +359,7 @@ if model_package is not None and X_test is not None:
         feature_importance = pd.DataFrame({
             'Feature': feature_cols,
             'Importance': model.feature_importances_
-        }).sort_values('Importance', ascending=False)
+        }).sort_values('Importance', ascending=False).head(15)
 
         col1, col2 = st.columns([2, 1])
 
@@ -403,13 +436,13 @@ if model_package is not None and X_test is not None:
     st.header("⚖️ Model Performance Summary")
 
     summary_data = {
-        'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'CV Mean'],
+        'Metric': ['Accuracy', 'Precision (Weighted)', 'Recall (Weighted)', 'F1-Score (Weighted)', 'AUC-ROC (Micro)', 'CV Mean'],
         'Score': [
             f"{accuracy:.4f}",
             f"{precision:.4f}",
             f"{recall:.4f}",
             f"{f1:.4f}",
-            f"{roc_auc:.4f}",
+            f"{roc_auc['micro']:.4f}",
             f"{cv_scores.mean():.4f}"
         ],
         'Percentage': [
@@ -417,7 +450,7 @@ if model_package is not None and X_test is not None:
             f"{precision*100:.2f}%",
             f"{recall*100:.2f}%",
             f"{f1*100:.2f}%",
-            f"{roc_auc*100:.2f}%",
+            f"{roc_auc['micro']*100:.2f}%",
             f"{cv_scores.mean()*100:.2f}%"
         ]
     }
