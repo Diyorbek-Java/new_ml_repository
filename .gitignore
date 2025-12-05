@@ -36,9 +36,9 @@ env/
 .vscode/
 
 # Models (optional - comment out if you want to track models)
-models/*.pkl
+# models/*.pkl  # UNCOMMENTED FOR DEPLOYMENT - Models needed for Streamlit Cloud
 models/*.h5
-models/*.joblib
+# models/*.joblib
 
 # Data (large files)
 # data/*.csv
